@@ -15,7 +15,7 @@ class GroqServiceError(Exception):
 client = AsyncGroq(api_key=settings.GROQ_API_KEY)
 
 
-async def describe_image(image_bytes: bytes) -> str:
+async def describe_image(image_bytes: bytes, seller_id: int = 0) -> str:
     """Call Groq Vision to describe a product image in Russian."""
     b64 = base64.b64encode(image_bytes).decode("utf-8")
     data_url = f"data:image/jpeg;base64,{b64}"
@@ -47,11 +47,11 @@ async def describe_image(image_bytes: bytes) -> str:
     except Exception as e:
         logger.warning("groq_describe_image error: %s", e)
         raise GroqServiceError(str(e)) from e
-    logger.info("groq_describe_image -> %d chars", len(result))
+    logger.info("groq_describe_image seller=%d -> %d chars", seller_id, len(result))
     return result
 
 
-async def transcribe_audio(audio_bytes: bytes) -> str:
+async def transcribe_audio(audio_bytes: bytes, seller_id: int = 0) -> str:
     """Transcribe voice audio (OGG) to Russian text via Groq Whisper."""
     try:
         response = await client.audio.transcriptions.create(
@@ -63,5 +63,5 @@ async def transcribe_audio(audio_bytes: bytes) -> str:
     except Exception as e:
         logger.warning("groq_transcribe_audio error: %s", e)
         raise GroqServiceError(str(e)) from e
-    logger.info("groq_transcribe_audio -> %d chars", len(result))
+    logger.info("groq_transcribe_audio seller=%d -> %d chars transcript", seller_id, len(result))
     return result
