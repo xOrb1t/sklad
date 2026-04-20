@@ -4,6 +4,7 @@ from pydantic_settings import BaseSettings
 class Settings(BaseSettings):
     BOT_TOKEN: str
     DATABASE_URL: str = "sqlite+aiosqlite:///:memory:"
+    GROQ_API_KEY: str
 
     class Config:
         env_file = ".env"
