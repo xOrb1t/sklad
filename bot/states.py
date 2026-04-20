@@ -7,3 +7,7 @@ class AddProduct(StatesGroup):
     waiting_description = State()
     waiting_sku = State()
     waiting_quantity = State()
+
+
+class UpdatingQuantity(StatesGroup):
+    waiting_qty = State()

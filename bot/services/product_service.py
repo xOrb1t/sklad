@@ -5,7 +5,7 @@ caller's unit-of-work transaction remains open; the handler layer commits.
 """
 from __future__ import annotations
 
-from sqlalchemy import delete, select, update
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from bot.models import Product
@@ -37,6 +37,17 @@ async def create_product(
     session.add(product)
     await session.flush()
     return product
+
+
+async def count_products(
+    session: AsyncSession,
+    seller_id: int,
+) -> int:
+    """Return the total number of products for the given seller."""
+    result = await session.execute(
+        select(func.count()).where(Product.seller_id == seller_id)
+    )
+    return result.scalar_one()
 
 
 async def get_products(
