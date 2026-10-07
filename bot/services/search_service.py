@@ -7,10 +7,11 @@ from __future__ import annotations
 
 import logging
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import case, func, literal, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from bot.models import Product
+from bot.services.query_terms import SearchQuery, query_from_text
 from bot.utils.avito_url import extract_avito_item_id
 
 logger = logging.getLogger(__name__)
@@ -81,6 +82,11 @@ async def search_by_text(
 ) -> list[Product]:
     """Return up to *limit* products that match *query* in name, description, or SKU.
 
+    First tries the whole query as one substring (precise for short queries
+    like «красный»). If that finds nothing, falls back to weighted term
+    matching (:func:`search_by_terms`) so that phrases such as
+    «есть ли чёрные найки» still hit «Nike Air Force черные».
+
     Matching is case-insensitive (``func.lower()`` + ``like()``) and
     Cyrillic-safe because SQLite/Postgres both lower-case Unicode properly
     with this approach.
@@ -99,6 +105,8 @@ async def search_by_text(
         .limit(limit)
     )
     products = list(result.scalars().all())
+    if not products:
+        products = await search_by_terms(session, seller_id, query_from_text(query), limit)
     logger.info(
         "search_by_text seller=%d query=%r -> %d results",
         seller_id,
@@ -106,3 +114,58 @@ async def search_by_text(
         len(products),
     )
     return products
+
+
+def _escape_like(term: str) -> str:
+    return term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+async def search_by_terms(
+    session: AsyncSession,
+    seller_id: int,
+    query: SearchQuery,
+    limit: int = 3,
+) -> list[Product]:
+    """Rank products by the summed weight of term groups they contain.
+
+    Each :class:`~bot.services.query_terms.TermGroup` contributes its weight
+    once if any of its alternatives is a substring of the product's name,
+    description or SKU. Products with zero score are excluded. Ties are broken
+    by newest first.
+    """
+    if not query.groups:
+        return []
+
+    haystack = (
+        func.lower(func.coalesce(Product.name, ""))
+        + literal(" ")
+        + func.lower(func.coalesce(Product.description, ""))
+        + literal(" ")
+        + func.lower(func.coalesce(Product.sku, ""))
+    )
+    score_terms = [
+        case(
+            (
+                or_(*(haystack.like(f"%{_escape_like(a)}%", escape="\\") for a in g.alternatives)),
+                g.weight,
+            ),
+            else_=0,
+        )
+        for g in query.groups
+    ]
+    score = sum(score_terms[1:], score_terms[0]).label("score")
+
+    result = await session.execute(
+        select(Product, score)
+        .where(Product.seller_id == seller_id, score > 0)
+        .order_by(score.desc(), Product.id.desc())
+        .limit(limit)
+    )
+    rows = result.all()
+    logger.info(
+        "search_by_terms seller=%d groups=%d -> %s",
+        seller_id,
+        len(query.groups),
+        [(p.id, sc) for p, sc in rows],
+    )
+    return [p for p, _ in rows]

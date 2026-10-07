@@ -7,6 +7,8 @@ class Settings(BaseSettings):
     BOT_TOKEN: str
     DATABASE_URL: str = "sqlite+aiosqlite:///:memory:"
     GROQ_API_KEY: str
+    VISION_MODEL: str = "meta-llama/llama-4-scout-17b-16e-instruct"
+    WHISPER_MODEL: str = "whisper-large-v3-turbo"
 
 
 settings = Settings()
