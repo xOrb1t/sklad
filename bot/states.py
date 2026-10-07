@@ -6,8 +6,11 @@ class AddProduct(StatesGroup):
     waiting_name = State()
     waiting_description = State()
     waiting_sku = State()
+    waiting_avito = State()
     waiting_quantity = State()
 
 
-class UpdatingQuantity(StatesGroup):
-    waiting_qty = State()
+class EditProduct(StatesGroup):
+    """Editing one field of an existing product; data: product_id, field."""
+
+    waiting_value = State()

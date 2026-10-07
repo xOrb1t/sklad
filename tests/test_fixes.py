@@ -142,7 +142,7 @@ async def test_update_product_and_stats(db_session: AsyncSession) -> None:
     upd = await update_product(db_session, p.id, s.id, avito_url="https://www.avito.ru/a/b/x_1234567")
     assert upd is not None and upd.avito_item_id == "1234567"
     with pytest.raises(ValueError):
-        await update_product(db_session, p.id, s.id, photo_file_id="x")
+        await update_product(db_session, p.id, s.id, avito_item_id="x")
     assert await update_product(db_session, p.id, s.id + 1, name="hack") is None
 
     st = await inventory_stats(db_session, s.id)

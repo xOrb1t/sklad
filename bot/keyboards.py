@@ -51,12 +51,34 @@ def product_list_keyboard(
 
 
 def product_card_keyboard(product_id: int) -> InlineKeyboardMarkup:
-    """Keyboard for a single product card: update qty, delete, back."""
+    """Keyboard for a single product card: quick ±1, edit, delete, back."""
     builder = InlineKeyboardBuilder()
-    builder.button(text="✏️ Изменить количество", callback_data=f"qty:{product_id}")
+    builder.button(text="➖ 1", callback_data=f"adj:{product_id}:-1")
+    builder.button(text="🔢 Количество", callback_data=f"edit:{product_id}:quantity")
+    builder.button(text="➕ 1", callback_data=f"adj:{product_id}:1")
+    builder.button(text="✏️ Изменить", callback_data=f"editmenu:{product_id}")
     builder.button(text="🗑 Удалить", callback_data=f"delete:{product_id}")
     builder.button(text="◀️ Назад к списку", callback_data="back_to_list")
-    builder.adjust(1)
+    builder.adjust(3, 2, 1)
+    return builder.as_markup()
+
+
+EDIT_FIELDS: dict[str, str] = {
+    "name": "Название",
+    "description": "Описание",
+    "sku": "Артикул",
+    "avito_url": "Ссылка Avito",
+    "photo": "Фото",
+    "quantity": "Количество",
+}
+
+
+def edit_menu_keyboard(product_id: int) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    for field, label in EDIT_FIELDS.items():
+        builder.button(text=label, callback_data=f"edit:{product_id}:{field}")
+    builder.button(text="◀️ К карточке", callback_data=f"view:{product_id}")
+    builder.adjust(2, 2, 2, 1)
     return builder.as_markup()
 
 

@@ -38,6 +38,7 @@
         <button type="button" class="seg-btn" data-stock="low">Мало</button>
         <button type="button" class="seg-btn" data-stock="depleted">Нет в наличии</button>
       </div>
+      <a class="btn btn-ghost" href="/api/export.csv" download>Экспорт CSV</a>
       <button class="btn btn-primary" id="add-btn" type="button">+ Добавить</button>
     </div>
     <div id="matched" class="muted small" hidden></div>
@@ -70,6 +71,13 @@
       <label>Количество<input name="quantity" type="number" min="0" step="1" value="0" required></label>
     </div>
     <label>Ссылка Avito<input name="avito_url" type="url" maxlength="2000" placeholder="https://www.avito.ru/…"></label>
+    <div class="photo-field">
+      <img id="edit-photo" class="photo-preview" alt="" hidden>
+      <div class="photo-controls">
+        <label>Фото<input name="photo" type="file" accept="image/jpeg,image/png,image/webp"></label>
+        <label class="check" id="photo-remove-wrap" hidden><input name="photo_remove" type="checkbox"> удалить текущее фото</label>
+      </div>
+    </div>
     <p id="edit-error" class="error" hidden></p>
     <div class="dlg-actions">
       <button class="btn btn-ghost" value="cancel" formnovalidate>Отмена</button>

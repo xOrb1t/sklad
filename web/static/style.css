@@ -137,6 +137,13 @@ tr.flash { animation: flash .8s ease-out; }
 .dlg h2 { margin: 0 0 4px; font-size: 18px; }
 .dlg label { display: grid; gap: 4px; font-size: 13px; color: var(--muted); }
 .dlg .row2 { display: grid; grid-template-columns: 1fr 140px; gap: 12px; }
+.photo-field { display: flex; gap: 12px; align-items: flex-start; }
+.photo-controls { display: grid; gap: 8px; flex: 1; min-width: 0; }
+.photo-preview { width: 88px; height: 88px; object-fit: cover; border-radius: 8px; border: 1px solid var(--border); }
+.dlg input[type=file] { padding: 6px; }
+.dlg .check { display: flex; align-items: center; gap: 6px; color: var(--text); }
+.dlg .check input { width: auto; }
+a.btn { text-decoration: none; display: inline-block; }
 .dlg-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
 
 .toast {

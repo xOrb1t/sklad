@@ -8,6 +8,9 @@ Run:  uvicorn web.app:app --host 0.0.0.0 --port 8080
 """
 from __future__ import annotations
 
+import csv
+import hashlib
+import io
 import logging
 import time
 from collections import OrderedDict
@@ -18,8 +21,9 @@ from pathlib import Path
 from typing import Annotated, Literal
 
 from aiogram import Bot
+from aiogram.types import BufferedInputFile
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
-from fastapi.responses import FileResponse, RedirectResponse
+from fastapi.responses import FileResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -116,6 +120,7 @@ class ProductOut(BaseModel):
     quantity: int
     avito_url: str | None
     has_photo: bool
+    photo_key: str | None  # changes with the photo — cache-buster for the <img> URL
     created_at: str
 
     @classmethod
@@ -128,6 +133,7 @@ class ProductOut(BaseModel):
             quantity=p.quantity,
             avito_url=p.avito_url,
             has_photo=bool(p.photo_file_id),
+            photo_key=hashlib.sha1(p.photo_file_id.encode()).hexdigest()[:10] if p.photo_file_id else None,
             created_at=p.created_at.isoformat() if p.created_at else "",
         )
 
@@ -321,6 +327,81 @@ async def product_photo(product_id: int, seller: CurrentSeller, session: DB) -> 
     else:
         _photo_cache.move_to_end(p.photo_file_id)
     return Response(data, media_type="image/jpeg", headers={"Cache-Control": "private, max-age=86400"})
+
+
+MAX_PHOTO_BYTES = 10 * 1024 * 1024  # Telegram's limit for photos
+PHOTO_TYPES = frozenset({"image/jpeg", "image/png", "image/webp"})
+
+
+@app.put("/api/products/{product_id}/photo")
+async def upload_photo(product_id: int, request: Request, seller: CurrentSeller, session: DB) -> ProductOut:
+    """Store a photo the same way the bot does: as a Telegram file_id.
+
+    The image is sent silently to the seller's own chat with the bot to obtain
+    a file_id, then that service message is deleted.  Body: raw image bytes.
+    """
+    p = await get_product(session, product_id, seller.id)
+    if p is None:
+        raise HTTPException(404, "not found")
+    ctype = request.headers.get("content-type", "").split(";")[0].strip()
+    if ctype not in PHOTO_TYPES:
+        raise HTTPException(415, "нужен JPEG, PNG или WebP")
+    data = bytearray()
+    async for chunk in request.stream():
+        data += chunk
+        if len(data) > MAX_PHOTO_BYTES:
+            raise HTTPException(413, "файл больше 10 МБ")
+    if not data:
+        raise HTTPException(422, "пустой файл")
+
+    bot = get_bot()
+    try:
+        msg = await bot.send_photo(
+            seller.telegram_id, BufferedInputFile(bytes(data), "photo"), disable_notification=True
+        )
+    except Exception as e:  # noqa: BLE001
+        logger.warning("photo upload failed product=%d: %s", product_id, e)
+        raise HTTPException(502, "Telegram не принял фото (бот заблокирован или недоступен?)") from e
+    try:
+        await bot.delete_message(seller.telegram_id, msg.message_id)
+    except Exception:  # noqa: BLE001 — leftover service message is harmless
+        pass
+
+    p.photo_file_id = msg.photo[-1].file_id  # type: ignore[index]
+    await session.flush()
+    return ProductOut.of(p)
+
+
+@app.delete("/api/products/{product_id}/photo")
+async def delete_photo(product_id: int, seller: CurrentSeller, session: DB) -> ProductOut:
+    p = await update_product(session, product_id, seller.id, photo_file_id=None)
+    if p is None:
+        raise HTTPException(404, "not found")
+    return ProductOut.of(p)
+
+
+CSV_FIELDS = ("id", "name", "description", "sku", "quantity", "avito_url", "created_at")
+
+
+@app.get("/api/export.csv")
+async def export_csv(seller: CurrentSeller, session: DB) -> StreamingResponse:
+    """All products as CSV (``;`` + UTF-8 BOM so Excel opens Cyrillic correctly)."""
+    items, _ = await list_products(session, seller.id, offset=0, limit=1_000_000)
+    buf = io.StringIO()
+    buf.write("\ufeff")
+    w = csv.writer(buf, delimiter=";")
+    w.writerow(CSV_FIELDS)
+    for p in items:
+        w.writerow([
+            p.id, p.name, p.description or "", p.sku or "", p.quantity, p.avito_url or "",
+            p.created_at.isoformat() if p.created_at else "",
+        ])
+    stamp = time.strftime("%Y%m%d")
+    return StreamingResponse(
+        iter([buf.getvalue()]),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="sklad-{stamp}.csv"'},
+    )
 
 
 # ---------------------------------------------------------------------------

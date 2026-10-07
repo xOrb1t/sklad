@@ -129,7 +129,7 @@ async def delete_product(
     return result.rowcount > 0
 
 
-_EDITABLE = frozenset({"name", "description", "sku", "quantity", "avito_url"})
+_EDITABLE = frozenset({"name", "description", "sku", "quantity", "avito_url", "photo_file_id"})
 
 
 async def update_product(

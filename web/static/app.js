@@ -19,12 +19,15 @@ function h(tag, attrs = {}, ...children) {
 /* ---------------------------------------------------------------- api */
 class ApiError extends Error {}
 
-async function api(path, { method = "GET", body } = {}) {
+async function api(path, { method = "GET", body, file } = {}) {
+  const headers = { "X-Sklad": "1" };
+  if (file) headers["Content-Type"] = file.type;
+  else if (body) headers["Content-Type"] = "application/json";
   const res = await fetch(path, {
     method,
     credentials: "same-origin",
-    headers: { "X-Sklad": "1", ...(body ? { "Content-Type": "application/json" } : {}) },
-    body: body ? JSON.stringify(body) : undefined,
+    headers,
+    body: file ?? (body ? JSON.stringify(body) : undefined),
   });
   if (res.status === 401) { lock(); throw new ApiError("Сессия истекла"); }
   if (!res.ok) {
@@ -95,11 +98,14 @@ function avitoLink(url) {
   return h("a", { href: url, target: "_blank", rel: "noopener noreferrer" }, label);
 }
 
+const photoUrl = (p) => `/api/products/${p.id}/photo?v=${p.photo_key}`;
+const MAX_PHOTO = 10 * 1024 * 1024;
+
 function productRow(p) {
   const out = h("output", {}, String(p.quantity));
   const tr = h("tr", { dataset: { id: p.id, stock: stockOf(p) } },
     h("td", {}, p.has_photo
-      ? h("img", { class: "thumb", src: `/api/products/${p.id}/photo`, alt: "", loading: "lazy" })
+      ? h("img", { class: "thumb", src: photoUrl(p), alt: "", loading: "lazy" })
       : h("div", { class: "thumb-none" }, "·")),
     h("td", { class: "name" }, p.name, p.description ? h("small", {}, p.description) : null),
     h("td", {}, p.sku ?? h("span", { class: "muted" }, "—")),
@@ -177,6 +183,10 @@ function openEdit(p = null) {
   $("#edit-error").hidden = true;
   $("#edit-title").textContent = p ? "Редактирование" : "Новый товар";
   if (p) for (const k of ["name", "description", "sku", "quantity", "avito_url"]) f.elements[k].value = p[k] ?? "";
+  const img = $("#edit-photo");
+  img.hidden = !p?.has_photo;
+  if (p?.has_photo) img.src = photoUrl(p); else img.removeAttribute("src");
+  $("#photo-remove-wrap").hidden = !p?.has_photo;
   $("#edit").showModal();
   f.elements.name.focus();
 }
@@ -188,15 +198,30 @@ async function submitEdit(ev) {
   if (!f.reportValidity()) return;
   const body = Object.fromEntries(["name", "description", "sku", "avito_url"].map((k) => [k, f.elements[k].value]));
   body.quantity = Number(f.elements.quantity.value);
+  const file = f.elements.photo.files[0];
+  if (file && file.size > MAX_PHOTO) {
+    $("#edit-error").textContent = "Фото больше 10 МБ";
+    $("#edit-error").hidden = false;
+    return;
+  }
+  const btn = ev.submitter;
+  btn.disabled = true;
   try {
-    if (editing) await api(`/api/products/${editing.id}`, { method: "PATCH", body });
-    else await api("/api/products", { method: "POST", body });
+    const saved = editing
+      ? await api(`/api/products/${editing.id}`, { method: "PATCH", body })
+      : await api("/api/products", { method: "POST", body });
+    editing = saved; // a retry after a failed upload must not create a duplicate
+    if (file) await api(`/api/products/${saved.id}/photo`, { method: "PUT", file });
+    else if (f.elements.photo_remove.checked) await api(`/api/products/${saved.id}/photo`, { method: "DELETE" });
     $("#edit").close();
-    toast(editing ? "Сохранено" : "Товар добавлен");
+    toast("Сохранено");
     await refreshAll();
   } catch (e) {
     $("#edit-error").textContent = e.message;
     $("#edit-error").hidden = false;
+    loadProducts();
+  } finally {
+    btn.disabled = false;
   }
 }
 

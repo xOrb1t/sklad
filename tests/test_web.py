@@ -93,3 +93,49 @@ def test_tenant_isolation(client: TestClient) -> None:
     assert client.patch(f"/api/products/{pid}", json={"name": "x"}, headers=H).status_code == 404
     assert client.delete(f"/api/products/{pid}", headers=H).status_code == 404
     assert client.get(f"/api/products/{pid}/photo").status_code == 404
+
+
+class _FakeBot:
+    def __init__(self) -> None:
+        self.sent: list[int] = []
+        self.deleted: list[int] = []
+
+    async def send_photo(self, chat_id: int, photo, disable_notification: bool = False):  # type: ignore[no-untyped-def]
+        from types import SimpleNamespace
+
+        self.sent.append(chat_id)
+        return SimpleNamespace(message_id=99, photo=[SimpleNamespace(file_id="small"), SimpleNamespace(file_id="BIG")])
+
+    async def delete_message(self, chat_id: int, message_id: int) -> bool:
+        self.deleted.append(message_id)
+        return True
+
+
+def test_photo_upload_and_delete(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    fake = _FakeBot()
+    monkeypatch.setattr(web_app, "get_bot", lambda: fake)
+    login(client, 1)
+    pid = client.post("/api/products", json={"name": "p"}, headers=H).json()["id"]
+
+    url = f"/api/products/{pid}/photo"
+    assert client.put(url, content=b"x", headers={**H, "Content-Type": "text/plain"}).status_code == 415
+    assert client.put(url, content=b"", headers={**H, "Content-Type": "image/jpeg"}).status_code == 422
+    big = b"0" * (web_app.MAX_PHOTO_BYTES + 1)
+    assert client.put(url, content=big, headers={**H, "Content-Type": "image/jpeg"}).status_code == 413
+
+    r = client.put(url, content=b"\xff\xd8jpeg", headers={**H, "Content-Type": "image/jpeg"})
+    assert r.status_code == 200 and r.json()["has_photo"] and r.json()["photo_key"]
+    assert fake.sent == [1] and fake.deleted == [99]  # sent to the seller's own chat, then cleaned up
+
+    r = client.delete(url, headers=H)
+    assert r.status_code == 200 and not r.json()["has_photo"] and r.json()["photo_key"] is None
+
+
+def test_export_csv(client: TestClient) -> None:
+    login(client, 1)
+    client.post("/api/products", json={"name": "Фильтр; масляный", "sku": "A1", "quantity": 2}, headers=H)
+    r = client.get("/api/export.csv")
+    assert r.status_code == 200 and "attachment" in r.headers["content-disposition"]
+    text = r.content.decode("utf-8")
+    assert text.startswith("﻿id;name;")
+    assert '"Фильтр; масляный";;A1;2;' in text
