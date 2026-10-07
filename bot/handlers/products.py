@@ -3,16 +3,21 @@ from __future__ import annotations
 
 import logging
 import math
+from html import escape
 
 from aiogram import F, Router
 from aiogram.filters import Command, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from bot.keyboards import product_card_keyboard, product_list_keyboard, skip_keyboard
-from bot.models import Seller
+from bot.formatting import format_product_card
+from bot.keyboards import (
+    confirm_delete_keyboard,
+    product_card_keyboard,
+    product_list_keyboard,
+    skip_keyboard,
+)
 from bot.services.product_service import (
     count_products,
     create_product,
@@ -21,6 +26,7 @@ from bot.services.product_service import (
     get_products,
     update_quantity,
 )
+from bot.services.seller_service import get_seller as _get_seller
 from bot.states import AddProduct, UpdatingQuantity
 
 logger = logging.getLogger(__name__)
@@ -33,14 +39,6 @@ PAGE_SIZE = 10
 # ---------------------------------------------------------------------------
 # Internal helper
 # ---------------------------------------------------------------------------
-
-
-async def _get_seller(session: AsyncSession, telegram_id: int) -> Seller | None:
-    """Return the Seller row for *telegram_id*, or None if not registered."""
-    result = await session.execute(
-        select(Seller).where(Seller.telegram_id == telegram_id)
-    )
-    return result.scalar_one_or_none()
 
 
 async def _send_product_list(
@@ -107,21 +105,15 @@ async def cmd_addproduct(message: Message, session: AsyncSession, state: FSMCont
 
 
 # ---------------------------------------------------------------------------
-# FSM: /cancel and catch-all inside AddProduct
+# FSM: /cancel inside AddProduct (catch-all lives at the end of the module)
 # ---------------------------------------------------------------------------
 
 
-@router.message(StateFilter(AddProduct), Command("cancel"))
+@router.message(StateFilter(AddProduct, UpdatingQuantity), Command("cancel"))
 async def cmd_cancel_add(message: Message, state: FSMContext) -> None:
     await state.clear()
-    logger.info("Seller exited AddProduct FSM via /cancel")
-    await message.answer("Добавление отменено.")
-
-
-@router.message(StateFilter(AddProduct), F.text)
-async def fsm_catch_all(message: Message) -> None:
-    """Catch unexpected text in FSM states that expect a different input type."""
-    await message.answer("Вы в режиме добавления. Введите значение или /cancel для отмены.")
+    logger.info("Seller exited FSM via /cancel")
+    await message.answer("Отменено.")
 
 
 # ---------------------------------------------------------------------------
@@ -145,9 +137,13 @@ async def fsm_photo_skip(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.message.answer("Введите название товара:")  # type: ignore[union-attr]
 
 
-@router.message(AddProduct.waiting_name, F.text)
+@router.message(AddProduct.waiting_name, F.text, ~F.text.startswith("/"))
 async def fsm_name(message: Message, state: FSMContext) -> None:
-    await state.update_data(name=message.text)
+    name = (message.text or "").strip()[:255]
+    if not name:
+        await message.answer("Название не может быть пустым:")
+        return
+    await state.update_data(name=name)
     await state.set_state(AddProduct.waiting_description)
     await message.answer(
         "Введите описание товара или нажмите «Пропустить»:",
@@ -155,7 +151,7 @@ async def fsm_name(message: Message, state: FSMContext) -> None:
     )
 
 
-@router.message(AddProduct.waiting_description, F.text)
+@router.message(AddProduct.waiting_description, F.text, ~F.text.startswith("/"))
 async def fsm_description_message(message: Message, state: FSMContext) -> None:
     await state.update_data(description=message.text)
     await state.set_state(AddProduct.waiting_sku)
@@ -176,9 +172,9 @@ async def fsm_description_skip(callback: CallbackQuery, state: FSMContext) -> No
     )
 
 
-@router.message(AddProduct.waiting_sku, F.text)
+@router.message(AddProduct.waiting_sku, F.text, ~F.text.startswith("/"))
 async def fsm_sku_message(message: Message, state: FSMContext) -> None:
-    await state.update_data(sku=message.text)
+    await state.update_data(sku=(message.text or "").strip()[:128] or None)
     await state.set_state(AddProduct.waiting_quantity)
     await message.answer("Введите начальное количество (целое число ≥ 0):")
 
@@ -223,7 +219,7 @@ async def fsm_quantity(
     )
     await state.clear()
     logger.info("Product created id=%d (seller omitted)", product.id)
-    await message.answer(f"✅ Товар «{product.name}» успешно добавлен (кол-во: {qty}).")
+    await message.answer(f"✅ Товар «{escape(product.name)}» успешно добавлен (кол-во: {qty}).")
 
 
 # ---------------------------------------------------------------------------
@@ -266,16 +262,14 @@ async def cb_view_product(callback: CallbackQuery, session: AsyncSession) -> Non
         await callback.message.answer("Товар не найден.")  # type: ignore[union-attr]
         return
 
-    text = (
-        f"📦 <b>{product.name}</b>\n"
-        f"Кол-во: {product.quantity}\n"
-    )
-    if product.description:
-        text += f"Описание: {product.description}\n"
-    if product.sku:
-        text += f"Артикул: {product.sku}\n"
-
-    await callback.message.answer(text, parse_mode="HTML", reply_markup=product_card_keyboard(product.id))  # type: ignore[union-attr]
+    text = format_product_card(product, with_description=True)
+    keyboard = product_card_keyboard(product.id)
+    if product.photo_file_id:
+        await callback.message.answer_photo(  # type: ignore[union-attr]
+            product.photo_file_id, caption=text[:1024], parse_mode="HTML", reply_markup=keyboard
+        )
+    else:
+        await callback.message.answer(text, parse_mode="HTML", reply_markup=keyboard)  # type: ignore[union-attr]
 
 
 # ---------------------------------------------------------------------------
@@ -329,6 +323,15 @@ async def fsm_update_qty(
 
 
 @router.callback_query(F.data.startswith("delete:"))
+async def cb_delete_confirm(callback: CallbackQuery) -> None:
+    await callback.answer()
+    product_id = int(callback.data.split(":")[1])  # type: ignore[index]
+    await callback.message.answer(  # type: ignore[union-attr]
+        "Удалить товар безвозвратно?", reply_markup=confirm_delete_keyboard(product_id)
+    )
+
+
+@router.callback_query(F.data.startswith("delete_yes:"))
 async def cb_delete_product(callback: CallbackQuery, session: AsyncSession) -> None:
     await callback.answer()
     product_id = int(callback.data.split(":")[1])  # type: ignore[index]
@@ -366,19 +369,8 @@ async def cb_back_to_list(callback: CallbackQuery, session: AsyncSession) -> Non
 # ---------------------------------------------------------------------------
 
 
-@router.callback_query(F.data.startswith("prev_page:"))
-async def cb_prev_page(callback: CallbackQuery, session: AsyncSession) -> None:
-    await callback.answer()
-    page = int(callback.data.split(":")[1])  # type: ignore[index]
-    seller = await _get_seller(session, callback.from_user.id)
-    if seller is None:
-        await callback.message.answer("Сначала нажмите /start")  # type: ignore[union-attr]
-        return
-    await _send_product_list(callback, session, seller.id, page=page)
-
-
-@router.callback_query(F.data.startswith("next_page:"))
-async def cb_next_page(callback: CallbackQuery, session: AsyncSession) -> None:
+@router.callback_query(F.data.startswith("page:"))
+async def cb_page(callback: CallbackQuery, session: AsyncSession) -> None:
     await callback.answer()
     page = int(callback.data.split(":")[1])  # type: ignore[index]
     seller = await _get_seller(session, callback.from_user.id)
@@ -396,3 +388,15 @@ async def cb_next_page(callback: CallbackQuery, session: AsyncSession) -> None:
 @router.callback_query(F.data == "noop")
 async def cb_noop(callback: CallbackQuery) -> None:
     await callback.answer()
+
+
+# ---------------------------------------------------------------------------
+# FSM catch-all — MUST stay last: aiogram checks handlers in registration
+# order, so anything above it gets the first chance at a matching message.
+# ---------------------------------------------------------------------------
+
+
+@router.message(StateFilter(AddProduct, UpdatingQuantity))
+async def fsm_catch_all(message: Message) -> None:
+    """Catch unexpected input (wrong content type, stray commands) inside FSM flows."""
+    await message.answer("Ожидаю другое значение. Введите его или /cancel для отмены.")

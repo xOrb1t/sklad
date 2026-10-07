@@ -29,10 +29,10 @@ def product_list_keyboard(
     if total_pages > 1:
         pagination_buttons: list[tuple[str, str]] = []
         if page > 0:
-            pagination_buttons.append(("◀️ Назад", f"prev_page:{page - 1}"))
+            pagination_buttons.append(("◀️ Назад", f"page:{page - 1}"))
         pagination_buttons.append((f"{page + 1}/{total_pages}", "noop"))
         if page < total_pages - 1:
-            pagination_buttons.append(("Вперёд ▶️", f"next_page:{page + 1}"))
+            pagination_buttons.append(("Вперёд ▶️", f"page:{page + 1}"))
 
         for text, data in pagination_buttons:
             builder.button(text=text, callback_data=data)
@@ -64,4 +64,18 @@ def skip_keyboard() -> InlineKeyboardMarkup:
     """Single 'skip' button — used in optional FSM steps."""
     builder = InlineKeyboardBuilder()
     builder.button(text="⏭ Пропустить", callback_data="skip")
+    return builder.as_markup()
+
+
+def confirm_delete_keyboard(product_id: int) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(text="🗑 Да, удалить", callback_data=f"delete_yes:{product_id}")
+    builder.button(text="✖️ Отмена", callback_data=f"view:{product_id}")
+    builder.adjust(2)
+    return builder.as_markup()
+
+
+def web_login_keyboard(url: str) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(text="🖥 Открыть панель", url=url)
     return builder.as_markup()

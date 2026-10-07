@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Склад</title>
+<link rel="stylesheet" href="/static/style.css">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect x='4' y='8' width='24' height='18' rx='3' fill='%232563eb'/%3E%3Cpath d='M4 13h24' stroke='white' stroke-width='2'/%3E%3C/svg%3E">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">📦 Склад</div>
+  <div class="topbar-right">
+    <span id="who" class="muted"></span>
+    <button id="logout" class="btn btn-ghost" hidden>Выйти</button>
+  </div>
+</header>
+
+<section id="locked" class="locked" hidden>
+  <div class="card locked-card">
+    <h1>Нужен вход</h1>
+    <p>Отправьте боту команду <code>/web</code> и откройте полученную ссылку.
+      Ссылка одноразовая и действует ограниченное время.</p>
+    <p id="denied" class="error" hidden>Ссылка недействительна или уже использована — запросите новую.</p>
+  </div>
+</section>
+
+<main id="app" hidden>
+  <section class="stats" id="stats" aria-label="Сводка"></section>
+
+  <section class="card">
+    <div class="toolbar">
+      <input id="q" type="search" placeholder="Поиск: название, описание, артикул или ссылка Avito" maxlength="500" aria-label="Поиск">
+      <div class="seg" role="radiogroup" aria-label="Остаток">
+        <button type="button" class="seg-btn on" data-stock="">Все</button>
+        <button type="button" class="seg-btn" data-stock="low">Мало</button>
+        <button type="button" class="seg-btn" data-stock="depleted">Нет в наличии</button>
+      </div>
+      <button class="btn btn-primary" id="add-btn" type="button">+ Добавить</button>
+    </div>
+    <div id="matched" class="muted small" hidden></div>
+
+    <div class="table-wrap">
+      <table class="registry">
+        <thead>
+          <tr><th></th><th>Товар</th><th>Артикул</th><th>Avito</th><th class="num">Остаток</th><th></th></tr>
+        </thead>
+        <tbody id="rows"></tbody>
+      </table>
+    </div>
+    <div id="empty" class="empty" hidden>Ничего не найдено</div>
+
+    <div class="pager">
+      <button class="btn btn-ghost" id="prev" type="button" aria-label="Назад">←</button>
+      <span id="pageinfo" class="muted"></span>
+      <button class="btn btn-ghost" id="next" type="button" aria-label="Вперёд">→</button>
+    </div>
+  </section>
+</main>
+
+<dialog id="edit" class="dlg">
+  <form id="edit-form" method="dialog">
+    <h2 id="edit-title">Новый товар</h2>
+    <label>Название<input name="name" maxlength="255" required></label>
+    <label>Описание<textarea name="description" rows="3" maxlength="4000"></textarea></label>
+    <div class="row2">
+      <label>Артикул<input name="sku" maxlength="128"></label>
+      <label>Количество<input name="quantity" type="number" min="0" step="1" value="0" required></label>
+    </div>
+    <label>Ссылка Avito<input name="avito_url" type="url" maxlength="2000" placeholder="https://www.avito.ru/…"></label>
+    <p id="edit-error" class="error" hidden></p>
+    <div class="dlg-actions">
+      <button class="btn btn-ghost" value="cancel" formnovalidate>Отмена</button>
+      <button class="btn btn-primary" value="ok">Сохранить</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="confirm" class="dlg">
+  <form method="dialog">
+    <h2>Удалить товар?</h2>
+    <p id="confirm-text"></p>
+    <div class="dlg-actions">
+      <button class="btn btn-ghost" value="cancel">Отмена</button>
+      <button class="btn btn-danger" value="ok">Удалить</button>
+    </div>
+  </form>
+</dialog>
+
+<div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

@@ -6,6 +6,9 @@ in alembic.ini with the runtime DATABASE_URL from settings), then starts the bot
 
 Usage (Docker CMD / direct):
     python -m bot.startup
+
+Migrations run *before* the event loop starts: alembic/env.py calls
+``asyncio.run()`` itself, which fails inside an already running loop.
 """
 
 import asyncio
@@ -35,14 +38,14 @@ def run_migrations() -> None:
     logger.info("Migrations complete.")
 
 
-async def start() -> None:
+def start() -> None:
     """Run migrations then start the bot."""
-    # Import main lazily to avoid circular-import issues at module load time.
+    run_migrations()
+    # Import main lazily: it configures logging (after alembic's fileConfig)
     from main import main  # noqa: PLC0415
 
-    run_migrations()
-    await main()
+    asyncio.run(main())
 
 
 if __name__ == "__main__":
-    asyncio.run(start())
+    start()

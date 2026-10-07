@@ -1,7 +1,7 @@
 """Tests for the AI search handlers and groq_service wrappers.
 
 Groq client is always mocked — no real API calls in CI.
-Handler-level tests mock describe_image / transcribe_audio / search_by_text
+Handler-level tests mock describe_image / transcribe_audio / search_by_keywords
 directly to verify control-flow logic (empty result, error path, happy path).
 """
 from __future__ import annotations
@@ -127,7 +127,7 @@ async def test_transcribe_audio_groq_error() -> None:
 
 @pytest.mark.asyncio
 async def test_photo_search_returns_product(db_session: AsyncSession) -> None:
-    """Photo handler calls search_by_text with the description and replies with results."""
+    """Photo handler calls search_by_keywords with the description and replies with results."""
     from bot.handlers.ai_search import handle_photo_search
 
     seller = await _make_seller(db_session, telegram_id=100)
@@ -144,7 +144,7 @@ async def test_photo_search_returns_product(db_session: AsyncSession) -> None:
 
     with (
         patch("bot.handlers.ai_search.describe_image", AsyncMock(return_value="Красные кроссовки")),
-        patch("bot.handlers.ai_search.search_by_text", mock_search),
+        patch("bot.handlers.ai_search.search_by_keywords", mock_search),
     ):
         await handle_photo_search(msg, bot, db_session)
 
@@ -155,7 +155,7 @@ async def test_photo_search_returns_product(db_session: AsyncSession) -> None:
 
 @pytest.mark.asyncio
 async def test_photo_search_empty_description(db_session: AsyncSession) -> None:
-    """Photo handler replies 'Ничего не найдено.' and does NOT call search_by_text when description is empty."""
+    """Photo handler replies 'Ничего не найдено.' and does NOT call search_by_keywords when description is empty."""
     from bot.handlers.ai_search import handle_photo_search
 
     seller = await _make_seller(db_session, telegram_id=101)
@@ -169,7 +169,7 @@ async def test_photo_search_empty_description(db_session: AsyncSession) -> None:
 
     with (
         patch("bot.handlers.ai_search.describe_image", AsyncMock(return_value="   ")),
-        patch("bot.handlers.ai_search.search_by_text", mock_search),
+        patch("bot.handlers.ai_search.search_by_keywords", mock_search),
     ):
         await handle_photo_search(msg, bot, db_session)
 
@@ -181,7 +181,7 @@ async def test_photo_search_empty_description(db_session: AsyncSession) -> None:
 
 @pytest.mark.asyncio
 async def test_voice_search_returns_product(db_session: AsyncSession) -> None:
-    """Voice handler calls search_by_text with the transcript and replies with results."""
+    """Voice handler calls search_by_keywords with the transcript and replies with results."""
     from bot.handlers.ai_search import handle_voice_search
 
     seller = await _make_seller(db_session, telegram_id=102)
@@ -197,7 +197,7 @@ async def test_voice_search_returns_product(db_session: AsyncSession) -> None:
 
     with (
         patch("bot.handlers.ai_search.transcribe_audio", AsyncMock(return_value="синие ботинки")),
-        patch("bot.handlers.ai_search.search_by_text", mock_search),
+        patch("bot.handlers.ai_search.search_by_keywords", mock_search),
     ):
         await handle_voice_search(msg, bot, db_session)
 
@@ -244,7 +244,7 @@ async def test_photo_search_unregistered_seller(db_session: AsyncSession) -> Non
 
 @pytest.mark.asyncio
 async def test_voice_search_empty_transcript(db_session: AsyncSession) -> None:
-    """Voice handler replies 'Ничего не найдено.' and does NOT call search_by_text when transcript is empty."""
+    """Voice handler replies 'Ничего не найдено.' and does NOT call search_by_keywords when transcript is empty."""
     from bot.handlers.ai_search import handle_voice_search
 
     seller = await _make_seller(db_session, telegram_id=104)
@@ -258,7 +258,7 @@ async def test_voice_search_empty_transcript(db_session: AsyncSession) -> None:
 
     with (
         patch("bot.handlers.ai_search.transcribe_audio", AsyncMock(return_value="")),
-        patch("bot.handlers.ai_search.search_by_text", mock_search),
+        patch("bot.handlers.ai_search.search_by_keywords", mock_search),
     ):
         await handle_voice_search(msg, bot, db_session)
 

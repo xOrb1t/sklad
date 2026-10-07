@@ -16,8 +16,9 @@ from bot.models import Base
 config = context.config
 
 # Interpret the config file for Python logging.
+# Keep app loggers alive when migrations run in-process (bot/startup.py).
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 target_metadata = Base.metadata
 

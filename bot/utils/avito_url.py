@@ -4,9 +4,9 @@ from __future__ import annotations
 import re
 
 # Avito item URLs end with a 6+ digit item ID, optionally followed by query/fragment.
-# Pattern handles both slash-separated IDs (/3456789012) and hyphen-separated slugs
-# (iphone-3456789012), plus optional ?query or #anchor after the ID.
-_ITEM_ID_RE = re.compile(r'[/-](\d{6,})(?:[?#].*)?$')
+# Real listings use underscores (iphone_15_pro_3456789012); slash- and
+# hyphen-separated IDs are accepted too, plus optional ?query or #anchor.
+_ITEM_ID_RE = re.compile(r'[/_-](\d{6,})(?:[?#].*)?$')
 
 
 def extract_avito_item_id(url: str | None) -> str | None:
@@ -15,6 +15,8 @@ def extract_avito_item_id(url: str | None) -> str | None:
     Examples::
 
         >>> extract_avito_item_id("https://www.avito.ru/moskva/telefony/iphone-3456789012")
+        '3456789012'
+        >>> extract_avito_item_id("https://www.avito.ru/moskva/telefony/iphone_15_pro_3456789012?context=x")
         '3456789012'
         >>> extract_avito_item_id("not-a-url")
         None

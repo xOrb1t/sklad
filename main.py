@@ -4,6 +4,7 @@ import logging
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
+from aiogram.types import BotCommand
 
 from bot.config import settings
 from bot.database import async_session_factory, engine
@@ -13,6 +14,7 @@ from bot.routers import register_routers
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s  %(levelname)-8s  %(name)s  %(message)s",
+    force=True,  # override alembic's fileConfig when started via bot/startup.py
 )
 logger = logging.getLogger(__name__)
 
@@ -30,8 +32,16 @@ async def main() -> None:
     # Register all feature routers
     register_routers(dp)
 
-    logger.info("Starting polling…")
     try:
+        await bot.set_my_commands([
+            BotCommand(command="myproducts", description="Мои товары"),
+            BotCommand(command="addproduct", description="Добавить товар"),
+            BotCommand(command="search", description="Поиск"),
+            BotCommand(command="web", description="Веб-панель"),
+            BotCommand(command="cancel", description="Отменить ввод"),
+            BotCommand(command="help", description="Справка"),
+        ])
+        logger.info("Starting polling…")
         await dp.start_polling(bot)
     finally:
         await engine.dispose()
