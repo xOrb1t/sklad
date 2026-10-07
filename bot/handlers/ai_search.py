@@ -1,6 +1,7 @@
-"""AI-powered search handlers: photo (Groq Vision) and voice (Groq Whisper)."""
+"""AI-powered search handlers: photo (vision model → structured attributes) and voice (Whisper)."""
 from __future__ import annotations
 
+import html
 import logging
 from io import BytesIO
 
@@ -9,9 +10,10 @@ from aiogram.types import Message
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from bot.models import Seller
-from bot.services.groq_service import GroqServiceError, describe_image, transcribe_audio
-from bot.services.search_service import search_by_text
+from bot.models import Product, Seller
+from bot.services.groq_service import GroqServiceError, extract_item, transcribe_audio
+from bot.services.query_terms import query_from_item
+from bot.services.search_service import search_by_sku, search_by_terms, search_by_text
 
 logger = logging.getLogger(__name__)
 
@@ -31,13 +33,13 @@ async def _get_seller(session: AsyncSession, telegram_id: int) -> Seller | None:
     return result.scalar_one_or_none()
 
 
-def _format_product_card(product) -> str:  # type: ignore[no-untyped-def]
-    lines = [f"📦 <b>{product.name}</b>"]
+def _format_product_card(product: Product) -> str:
+    lines = [f"📦 <b>{html.escape(product.name)}</b>"]
     lines.append(f"Кол-во: {product.quantity}")
     if product.sku:
-        lines.append(f"Артикул: {product.sku}")
+        lines.append(f"Артикул: {html.escape(product.sku)}")
     if product.avito_url:
-        lines.append(f"Avito: {product.avito_url}")
+        lines.append(f"Avito: {html.escape(product.avito_url)}")
     return "\n".join(lines)
 
 
@@ -48,7 +50,11 @@ def _format_product_card(product) -> str:  # type: ignore[no-untyped-def]
 
 @router.message(F.photo)
 async def handle_photo_search(message: Message, bot: Bot, session: AsyncSession) -> None:
-    """Describe the photo via Groq Vision and search for matching products."""
+    """Extract structured attributes from the photo via the vision model and search by them.
+
+    Order: exact style code (from the tag/box or caption) → weighted term
+    search over brand / model / category / colours.
+    """
     seller = await _get_seller(session, message.from_user.id)  # type: ignore[union-attr]
     if seller is None:
         await message.answer("Сначала используйте /start")
@@ -60,31 +66,45 @@ async def handle_photo_search(message: Message, bot: Bot, session: AsyncSession)
     buf = BytesIO()
     await bot.download(photo, destination=buf)
     image_bytes = buf.getvalue()
+    caption = message.caption or None
 
     try:
-        description = await describe_image(image_bytes, seller_id=seller.id)
+        item = await extract_item(image_bytes, caption=caption, seller_id=seller.id)
     except GroqServiceError:
         await message.answer("Сервис временно недоступен, попробуйте позже.")
         return
 
-    if not description.strip():
-        await message.answer("Ничего не найдено.")
+    query = query_from_item(item, caption=caption)
+    if item.is_empty() and not query.groups:
+        await message.answer("Не удалось распознать товар на фото. Попробуйте другой ракурс или подпишите фото.")
         return
 
-    products = await search_by_text(session, seller.id, description, limit=3)
+    recognized = f"🔎 Распознано: {html.escape(item.summary())}" if item.summary() else ""
+
+    products: list[Product] = []
+    if query.style_code:
+        exact = await search_by_sku(session, seller.id, query.style_code)
+        if exact:
+            products = [exact]
+    if not products:
+        products = await search_by_terms(session, seller.id, query, limit=3)
+
     logger.info(
-        "ai_photo_search seller=%d description=%r -> %d results",
+        "ai_photo_search seller=%d item=%s -> %d results",
         seller.id,
-        description,
+        item.model_dump(exclude_defaults=True),
         len(products),
     )
 
     if not products:
-        await message.answer("Ничего не найдено.")
+        text = "Ничего не найдено."
+        if recognized:
+            text = f"{recognized}\n\n{text}"
+        await message.answer(text, parse_mode="HTML")
         return
 
-    lines = [_format_product_card(p) for p in products]
-    await message.answer("\n\n".join(lines), parse_mode="HTML")
+    cards = "\n\n".join(_format_product_card(p) for p in products)
+    await message.answer(f"{recognized}\n\n{cards}" if recognized else cards, parse_mode="HTML")
 
 
 # ---------------------------------------------------------------------------
