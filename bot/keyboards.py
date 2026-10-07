@@ -57,9 +57,10 @@ def product_card_keyboard(product_id: int) -> InlineKeyboardMarkup:
     builder.button(text="🔢 Количество", callback_data=f"edit:{product_id}:quantity")
     builder.button(text="➕ 1", callback_data=f"adj:{product_id}:1")
     builder.button(text="✏️ Изменить", callback_data=f"editmenu:{product_id}")
+    builder.button(text="📜 История", callback_data=f"hist:{product_id}")
     builder.button(text="🗑 Удалить", callback_data=f"delete:{product_id}")
     builder.button(text="◀️ Назад к списку", callback_data="back_to_list")
-    builder.adjust(3, 2, 1)
+    builder.adjust(3, 2, 2)
     return builder.as_markup()
 
 
@@ -100,4 +101,15 @@ def confirm_delete_keyboard(product_id: int) -> InlineKeyboardMarkup:
 def web_login_keyboard(url: str) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     builder.button(text="🖥 Открыть панель", url=url)
+    return builder.as_markup()
+
+
+def alerts_keyboard(enabled: bool, threshold: int) -> InlineKeyboardMarkup:
+    builder = InlineKeyboardBuilder()
+    builder.button(
+        text="🔕 Выключить уведомления" if enabled else "🔔 Включить уведомления",
+        callback_data="alerts:toggle",
+    )
+    builder.button(text=f"✏️ Порог «мало»: {threshold}", callback_data="alerts:threshold")
+    builder.adjust(1)
     return builder.as_markup()

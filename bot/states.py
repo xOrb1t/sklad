@@ -14,3 +14,7 @@ class EditProduct(StatesGroup):
     """Editing one field of an existing product; data: product_id, field."""
 
     waiting_value = State()
+
+
+class AlertSettings(StatesGroup):
+    waiting_threshold = State()

@@ -2,7 +2,7 @@
 
 const PAGE_SIZE = 25;
 const $ = (sel) => document.querySelector(sel);
-const state = { page: 0, q: "", stock: "", lowStock: 2 };
+const state = { page: 0, q: "", stock: "", lowStock: 2, settings: null };
 
 function h(tag, attrs = {}, ...children) {
   const el = document.createElement(tag);
@@ -17,11 +17,13 @@ function h(tag, attrs = {}, ...children) {
 }
 
 /* ---------------------------------------------------------------- api */
-class ApiError extends Error {}
+class ApiError extends Error {
+  constructor(message, status, detail) { super(message); this.status = status; this.detail = detail; }
+}
 
-async function api(path, { method = "GET", body, file } = {}) {
+async function api(path, { method = "GET", body, file, contentType } = {}) {
   const headers = { "X-Sklad": "1" };
-  if (file) headers["Content-Type"] = file.type;
+  if (file) headers["Content-Type"] = contentType || file.type || "application/octet-stream";
   else if (body) headers["Content-Type"] = "application/json";
   const res = await fetch(path, {
     method,
@@ -29,14 +31,16 @@ async function api(path, { method = "GET", body, file } = {}) {
     headers,
     body: file ?? (body ? JSON.stringify(body) : undefined),
   });
-  if (res.status === 401) { lock(); throw new ApiError("Сессия истекла"); }
+  if (res.status === 401) { lock(); throw new ApiError("Сессия истекла", 401); }
   if (!res.ok) {
-    let detail = res.statusText;
+    let message = res.statusText;
+    let raw = null;
     try {
-      const j = await res.json();
-      detail = Array.isArray(j.detail) ? j.detail.map((d) => d.msg).join("; ") : j.detail || detail;
+      raw = (await res.json()).detail;
+      if (Array.isArray(raw)) message = raw.map((d) => d.msg).join("; ");
+      else if (typeof raw === "string") message = raw;
     } catch { /* not json */ }
-    throw new ApiError(detail);
+    throw new ApiError(message, res.status, raw);
   }
   return res.status === 204 ? null : res.json();
 }
@@ -57,6 +61,25 @@ function lock() {
   $("#logout").hidden = true;
   $("#locked").hidden = false;
   if (new URLSearchParams(location.search).has("denied")) $("#denied").hidden = false;
+}
+
+/* ---------------------------------------------------------------- theme */
+const THEMES = ["", "light", "dark"]; // "" = follow the OS
+const THEME_ICON = { "": "🖥", light: "☀️", dark: "🌙" };
+const THEME_TITLE = { "": "Тема: как в системе", light: "Тема: светлая", dark: "Тема: тёмная" };
+
+function applyTheme(t) {
+  if (t) document.documentElement.dataset.theme = t;
+  else delete document.documentElement.dataset.theme;
+  const b = $("#theme");
+  b.textContent = THEME_ICON[t];
+  b.title = b.ariaLabel = THEME_TITLE[t];
+  try { t ? localStorage.setItem("theme", t) : localStorage.removeItem("theme"); } catch { /* private mode */ }
+}
+
+function cycleTheme() {
+  const cur = document.documentElement.dataset.theme ?? "";
+  applyTheme(THEMES[(THEMES.indexOf(cur) + 1) % THEMES.length]);
 }
 
 /* ---------------------------------------------------------------- stats */
@@ -107,7 +130,7 @@ function productRow(p) {
     h("td", {}, p.has_photo
       ? h("img", { class: "thumb", src: photoUrl(p), alt: "", loading: "lazy" })
       : h("div", { class: "thumb-none" }, "·")),
-    h("td", { class: "name" }, p.name, p.description ? h("small", {}, p.description) : null),
+    h("td", { class: "name", title: "Открыть", onclick: () => openEdit(p) }, p.name, p.description ? h("small", {}, p.description) : null),
     h("td", {}, p.sku ?? h("span", { class: "muted" }, "—")),
     h("td", {}, avitoLink(p.avito_url)),
     h("td", { class: "num" },
@@ -187,8 +210,28 @@ function openEdit(p = null) {
   img.hidden = !p?.has_photo;
   if (p?.has_photo) img.src = photoUrl(p); else img.removeAttribute("src");
   $("#photo-remove-wrap").hidden = !p?.has_photo;
+  $("#history").hidden = !p;
+  $("#edit-delete").hidden = !p;
+  $("#history").open = false;
+  $("#history-list").replaceChildren();
+  if (p) loadHistory(p.id);
   $("#edit").showModal();
   f.elements.name.focus();
+}
+
+const SOURCE = { bot: "бот", web: "веб", import: "импорт" };
+const fmtDate = (iso) => new Date(iso).toLocaleString("ru-RU", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
+
+async function loadHistory(id) {
+  try {
+    const items = await api(`/api/products/${id}/history`);
+    $("#history-list").replaceChildren(...(items.length ? items.map((m) =>
+      h("li", {},
+        h("span", { class: "muted" }, fmtDate(m.created_at)),
+        h("span", { class: m.delta > 0 ? "plus" : "minus" }, (m.delta > 0 ? "+" : "") + m.delta),
+        h("span", {}, `→ ${m.quantity_after}`),
+        h("span", { class: "muted" }, SOURCE[m.source] ?? m.source))) : [h("li", { class: "muted" }, "Изменений пока нет")]));
+  } catch { /* history is optional */ }
 }
 
 async function submitEdit(ev) {
@@ -240,6 +283,59 @@ function confirmDelete(p) {
   dlg.showModal();
 }
 
+/* ---------------------------------------------------------------- settings */
+function openSettings() {
+  const f = $("#settings-form");
+  f.elements.notify_low_stock.checked = state.settings.notify_low_stock;
+  f.elements.low_stock_threshold.value = state.settings.low_stock_threshold;
+  $("#settings-error").hidden = true;
+  $("#settings").showModal();
+}
+
+async function submitSettings(ev) {
+  if (ev.submitter?.value !== "ok") return;
+  ev.preventDefault();
+  const f = $("#settings-form");
+  if (!f.reportValidity()) return;
+  try {
+    state.settings = await api("/api/settings", {
+      method: "PATCH",
+      body: {
+        notify_low_stock: f.elements.notify_low_stock.checked,
+        low_stock_threshold: Number(f.elements.low_stock_threshold.value),
+      },
+    });
+    state.lowStock = state.settings.low_stock_threshold;
+    $("#settings").close();
+    toast("Настройки сохранены");
+    await refreshAll();
+  } catch (e) {
+    $("#settings-error").textContent = e.message;
+    $("#settings-error").hidden = false;
+  }
+}
+
+/* ---------------------------------------------------------------- import */
+async function importCsv(file) {
+  const errs = $("#import-errors");
+  errs.replaceChildren();
+  try {
+    const r = await api("/api/import.csv", { method: "POST", file, contentType: "text/csv" });
+    $("#import-title").textContent = "Импорт выполнен";
+    $("#import-summary").textContent = `Создано: ${r.created}, обновлено: ${r.updated}, без изменений: ${r.unchanged}.`;
+    await refreshAll();
+  } catch (e) {
+    $("#import-title").textContent = "Импорт отменён";
+    if (e.detail?.errors) {
+      $("#import-summary").textContent = `Ничего не изменено. Ошибок: ${e.detail.total}.`;
+      errs.replaceChildren(...e.detail.errors.map((x) => h("li", {}, x)));
+    } else {
+      $("#import-summary").textContent = e.message;
+    }
+  }
+  $("#import-result").showModal();
+}
+
 /* ---------------------------------------------------------------- wiring */
 function debounce(fn, ms) {
   let t;
@@ -247,6 +343,15 @@ function debounce(fn, ms) {
 }
 
 function wire() {
+  $("#theme").addEventListener("click", cycleTheme);
+  $("#settings-btn").addEventListener("click", openSettings);
+  $("#settings-form").addEventListener("submit", submitSettings);
+  $("#edit-delete").addEventListener("click", () => { const p = editing; $("#edit").close(); confirmDelete(p); });
+  $("#import-file").addEventListener("change", (e) => {
+    const file = e.target.files[0];
+    e.target.value = "";
+    if (file) importCsv(file);
+  });
   $("#add-btn").addEventListener("click", () => openEdit());
   $("#edit-form").addEventListener("submit", submitEdit);
   $("#prev").addEventListener("click", () => { state.page--; loadProducts(); });
@@ -262,12 +367,16 @@ function wire() {
 }
 
 async function boot() {
+  applyTheme(document.documentElement.dataset.theme ?? "");
   wire();
   let me;
   try { me = await api("/api/me"); } catch { return; }
   if (location.search) history.replaceState(null, "", "/");
   $("#who").textContent = me.username ? `@${me.username}` : `#${me.id}`;
+  state.settings = me.settings;
+  state.lowStock = me.settings.low_stock_threshold;
   $("#logout").hidden = false;
+  $("#settings-btn").hidden = false;
   $("#app").hidden = false;
   await refreshAll();
 }

@@ -8,9 +8,7 @@ Run:  uvicorn web.app:app --host 0.0.0.0 --port 8080
 """
 from __future__ import annotations
 
-import csv
 import hashlib
-import io
 import logging
 import time
 from collections import OrderedDict
@@ -22,8 +20,8 @@ from typing import Annotated, Literal
 
 from aiogram import Bot
 from aiogram.types import BufferedInputFile
-from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
-from fastapi.responses import FileResponse, RedirectResponse, StreamingResponse
+from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Query, Request, Response
+from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -32,10 +30,14 @@ from bot.config import settings
 from bot.database import async_session_factory, engine
 from bot.models import Product, Seller
 from bot.services import groq_service, web_auth
+from bot.services.alerts import build_alert
+from bot.services.csv_service import CsvImportError, export_csv, import_csv
 from bot.services.product_service import (
-    LOW_STOCK,
+    StockChange,
+    adjust_quantity,
     create_product,
     delete_product,
+    get_history,
     get_product,
     inventory_stats,
     list_products,
@@ -105,6 +107,20 @@ def get_bot() -> Bot:
     if _bot is None:
         _bot = Bot(token=settings.BOT_TOKEN)
     return _bot
+
+
+async def _send_text(chat_id: int, text: str) -> None:
+    try:
+        await get_bot().send_message(chat_id, text, parse_mode="HTML")
+    except Exception as e:  # noqa: BLE001 — alerts are best effort
+        logger.warning("stock alert failed: %s", e)
+
+
+def queue_alerts(bg: BackgroundTasks, seller: Seller, changes: list[StockChange]) -> None:
+    """Build the alert now (ORM objects are live), send after the response/commit."""
+    text = build_alert(seller, changes)
+    if text:
+        bg.add_task(_send_text, seller.telegram_id, text)
 
 
 # ---------------------------------------------------------------------------
@@ -177,6 +193,18 @@ class QtyDelta(BaseModel):
     delta: int = Field(ge=-1_000_000, le=1_000_000)
 
 
+class SettingsPatch(BaseModel):
+    notify_low_stock: bool | None = None
+    low_stock_threshold: int | None = Field(default=None, ge=0, le=1_000_000)
+
+
+class MovementOut(BaseModel):
+    delta: int
+    quantity_after: int
+    source: str
+    created_at: str
+
+
 # ---------------------------------------------------------------------------
 # Auth
 # ---------------------------------------------------------------------------
@@ -213,9 +241,28 @@ async def logout(_: CurrentSeller) -> Response:
     return resp
 
 
+def _settings(seller: Seller) -> dict[str, object]:
+    return {"notify_low_stock": seller.notify_low_stock, "low_stock_threshold": seller.low_stock_threshold}
+
+
 @app.get("/api/me")
 async def me(seller: CurrentSeller) -> dict[str, object]:
-    return {"id": seller.id, "username": seller.username, "ai": groq_service.is_enabled()}
+    return {
+        "id": seller.id,
+        "username": seller.username,
+        "ai": groq_service.is_enabled(),
+        "settings": _settings(seller),
+    }
+
+
+@app.patch("/api/settings")
+async def patch_settings(body: SettingsPatch, seller: CurrentSeller, session: DB) -> dict[str, object]:
+    for key, value in body.model_dump(exclude_unset=True).items():
+        if value is None:
+            raise HTTPException(422, f"{key} is required")
+        setattr(seller, key, value)
+    await session.flush()
+    return _settings(seller)
 
 
 # ---------------------------------------------------------------------------
@@ -225,7 +272,8 @@ async def me(seller: CurrentSeller) -> dict[str, object]:
 
 @app.get("/api/stats")
 async def stats(seller: CurrentSeller, session: DB) -> dict[str, object]:
-    return {**await inventory_stats(session, seller.id), "low_stock": LOW_STOCK}
+    threshold = seller.low_stock_threshold
+    return {**await inventory_stats(session, seller.id, threshold), "low_stock": threshold}
 
 
 @app.get("/api/search")
@@ -262,20 +310,28 @@ async def products(
     size: Annotated[int, Query(ge=1, le=200)] = 50,
 ) -> dict[str, object]:
     items, total = await list_products(
-        session, seller.id, query=(q or "").strip() or None, stock=stock, offset=page * size, limit=size
+        session,
+        seller.id,
+        query=(q or "").strip() or None,
+        stock=stock,
+        low_stock=seller.low_stock_threshold,
+        offset=page * size,
+        limit=size,
     )
     return {"items": [ProductOut.of(p) for p in items], "total": total, "page": page, "size": size}
 
 
 @app.post("/api/products", status_code=201)
 async def add_product(body: ProductIn, seller: CurrentSeller, session: DB) -> ProductOut:
-    p = await create_product(session, seller.id, **body.model_dump())
+    p = await create_product(session, seller.id, **body.model_dump(), source="web")
     await session.refresh(p)
     return ProductOut.of(p)
 
 
 @app.patch("/api/products/{product_id}")
-async def patch_product(product_id: int, body: ProductPatch, seller: CurrentSeller, session: DB) -> ProductOut:
+async def patch_product(
+    product_id: int, body: ProductPatch, seller: CurrentSeller, session: DB, bg: BackgroundTasks
+) -> ProductOut:
     fields = body.model_dump(exclude_unset=True)
     if fields.get("name") is not None:
         fields["name"] = fields["name"].strip()
@@ -283,20 +339,39 @@ async def patch_product(product_id: int, body: ProductPatch, seller: CurrentSell
         raise HTTPException(422, "name is empty")
     if "quantity" in fields and fields["quantity"] is None:
         raise HTTPException(422, "quantity is required")
-    p = await update_product(session, product_id, seller.id, **fields)
+    changes: list[StockChange] = []
+    p = await update_product(session, product_id, seller.id, source="web", changes=changes, **fields)
     if p is None:
         raise HTTPException(404, "not found")
+    queue_alerts(bg, seller, changes)
     return ProductOut.of(p)
 
 
 @app.post("/api/products/{product_id}/adjust")
-async def adjust_qty(product_id: int, body: QtyDelta, seller: CurrentSeller, session: DB) -> ProductOut:
+async def adjust_qty(
+    product_id: int, body: QtyDelta, seller: CurrentSeller, session: DB, bg: BackgroundTasks
+) -> ProductOut:
     p = await get_product(session, product_id, seller.id)
     if p is None:
         raise HTTPException(404, "not found")
-    p.quantity = max(0, p.quantity + body.delta)
-    await session.flush()
+    change = await adjust_quantity(session, p, body.delta, "web")
+    queue_alerts(bg, seller, [change] if change else [])
     return ProductOut.of(p)
+
+
+@app.get("/api/products/{product_id}/history")
+async def history(product_id: int, seller: CurrentSeller, session: DB) -> list[MovementOut]:
+    if await get_product(session, product_id, seller.id) is None:
+        raise HTTPException(404, "not found")
+    return [
+        MovementOut(
+            delta=m.delta,
+            quantity_after=m.quantity_after,
+            source=m.source,
+            created_at=m.created_at.isoformat() if m.created_at else "",
+        )
+        for m in await get_history(session, product_id, seller.id, limit=50)
+    ]
 
 
 @app.delete("/api/products/{product_id}", status_code=204)
@@ -380,28 +455,32 @@ async def delete_photo(product_id: int, seller: CurrentSeller, session: DB) -> P
     return ProductOut.of(p)
 
 
-CSV_FIELDS = ("id", "name", "description", "sku", "quantity", "avito_url", "created_at")
-
-
 @app.get("/api/export.csv")
-async def export_csv(seller: CurrentSeller, session: DB) -> StreamingResponse:
+async def export(seller: CurrentSeller, session: DB) -> Response:
     """All products as CSV (``;`` + UTF-8 BOM so Excel opens Cyrillic correctly)."""
     items, _ = await list_products(session, seller.id, offset=0, limit=1_000_000)
-    buf = io.StringIO()
-    buf.write("\ufeff")
-    w = csv.writer(buf, delimiter=";")
-    w.writerow(CSV_FIELDS)
-    for p in items:
-        w.writerow([
-            p.id, p.name, p.description or "", p.sku or "", p.quantity, p.avito_url or "",
-            p.created_at.isoformat() if p.created_at else "",
-        ])
     stamp = time.strftime("%Y%m%d")
-    return StreamingResponse(
-        iter([buf.getvalue()]),
+    return Response(
+        export_csv(items),
         media_type="text/csv; charset=utf-8",
         headers={"Content-Disposition": f'attachment; filename="sklad-{stamp}.csv"'},
     )
+
+
+@app.post("/api/import.csv")
+async def import_(request: Request, seller: CurrentSeller, session: DB, bg: BackgroundTasks) -> dict[str, object]:
+    """Raw CSV body. All-or-nothing: 422 with per-line errors writes nothing."""
+    data = bytearray()
+    async for chunk in request.stream():
+        data += chunk
+        if len(data) > 2 * 1024 * 1024:
+            raise HTTPException(413, "файл больше 2 МБ")
+    try:
+        result = await import_csv(session, seller.id, bytes(data))
+    except CsvImportError as e:
+        raise HTTPException(422, {"errors": e.errors[:50], "total": len(e.errors)}) from e
+    queue_alerts(bg, seller, result.changes)
+    return {"created": result.created, "updated": result.updated, "unchanged": result.unchanged}
 
 
 # ---------------------------------------------------------------------------

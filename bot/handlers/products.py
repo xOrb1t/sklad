@@ -12,7 +12,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from bot.formatting import format_product_card
+from bot.formatting import format_history, format_product_card
 from bot.keyboards import (
     EDIT_FIELDS,
     confirm_delete_keyboard,
@@ -23,9 +23,12 @@ from bot.keyboards import (
 )
 from bot.models import Product
 from bot.services.product_service import (
+    DEFAULT_LOW_STOCK,
+    adjust_quantity,
     count_products,
     create_product,
     delete_product,
+    get_history,
     get_product,
     get_products,
     update_product,
@@ -86,8 +89,12 @@ async def _send_product_list(
             await target.message.answer(text, reply_markup=keyboard)  # type: ignore[union-attr]
 
 
-async def _send_card(message: Message, product: Product) -> None:
-    text = format_product_card(product, with_description=True)
+def _card_text(product: Product, low_stock: int) -> str:
+    return format_product_card(product, with_description=True, low_stock=low_stock)
+
+
+async def _send_card(message: Message, product: Product, low_stock: int = DEFAULT_LOW_STOCK) -> None:
+    text = _card_text(product, low_stock)
     keyboard = product_card_keyboard(product.id)
     if product.photo_file_id:
         await message.answer_photo(
@@ -259,7 +266,7 @@ async def fsm_quantity(message: Message, state: FSMContext, session: AsyncSessio
     await state.clear()
     logger.info("Product created id=%d (seller omitted)", product.id)
     await message.answer(f"✅ Товар «{escape(product.name)}» добавлен (кол-во: {qty}).")
-    await _send_card(message, product)
+    await _send_card(message, product, seller.low_stock_threshold)
 
 
 @router.callback_query(F.data == "add_product")
@@ -290,7 +297,7 @@ async def cb_view_product(callback: CallbackQuery, session: AsyncSession, state:
     if product is None:
         await callback.message.answer("Товар не найден.")  # type: ignore[union-attr]
         return
-    await _send_card(callback.message, product)  # type: ignore[arg-type]
+    await _send_card(callback.message, product, seller.low_stock_threshold)  # type: ignore[arg-type]
 
 
 @router.callback_query(F.data.startswith("adj:"))
@@ -305,11 +312,11 @@ async def cb_adjust(callback: CallbackQuery, session: AsyncSession) -> None:
     if product.quantity + delta < 0:
         await callback.answer("Остаток уже 0.")
         return
-    product.quantity += delta
-    await session.flush()
+    await adjust_quantity(session, product, delta, "bot")
     await callback.answer(f"Остаток: {product.quantity}")
 
-    text = format_product_card(product, with_description=True)
+    threshold = seller.low_stock_threshold  # type: ignore[union-attr]
+    text = _card_text(product, threshold)
     keyboard = product_card_keyboard(product.id)
     msg = callback.message
     try:
@@ -318,7 +325,19 @@ async def cb_adjust(callback: CallbackQuery, session: AsyncSession) -> None:
         else:
             await msg.edit_text(text, parse_mode="HTML", reply_markup=keyboard)  # type: ignore[union-attr]
     except TelegramBadRequest:
-        await _send_card(msg, product)  # type: ignore[arg-type]
+        await _send_card(msg, product, threshold)  # type: ignore[arg-type]
+
+
+@router.callback_query(F.data.startswith("hist:"))
+async def cb_history(callback: CallbackQuery, session: AsyncSession) -> None:
+    await callback.answer()
+    seller = await _get_seller(session, callback.from_user.id)
+    product = await get_product(session, _parse_id(callback.data), seller.id) if seller else None
+    if product is None:
+        await callback.message.answer("Товар не найден.")  # type: ignore[union-attr]
+        return
+    movements = await get_history(session, product.id, seller.id, limit=15)  # type: ignore[union-attr]
+    await callback.message.answer(format_history(product, movements), parse_mode="HTML")  # type: ignore[union-attr]
 
 
 # ---------------------------------------------------------------------------
@@ -373,7 +392,7 @@ async def _apply_edit(message: Message, state: FSMContext, session: AsyncSession
         await message.answer("Товар не найден.")
         return
     await message.answer("✅ Сохранено.")
-    await _send_card(message, product)
+    await _send_card(message, product, seller.low_stock_threshold)  # type: ignore[union-attr]
 
 
 @router.message(EditProduct.waiting_value, F.photo)

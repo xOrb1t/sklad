@@ -5,6 +5,10 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex">
 <title>Склад</title>
+<script>
+  // apply the saved theme before first paint (no flash)
+  try { const t = localStorage.getItem("theme"); if (t) document.documentElement.dataset.theme = t; } catch {}
+</script>
 <link rel="stylesheet" href="/static/style.css">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect x='4' y='8' width='24' height='18' rx='3' fill='%232563eb'/%3E%3Cpath d='M4 13h24' stroke='white' stroke-width='2'/%3E%3C/svg%3E">
 </head>
@@ -14,6 +18,8 @@
   <div class="brand">📦 Склад</div>
   <div class="topbar-right">
     <span id="who" class="muted"></span>
+    <button id="theme" class="btn btn-ghost theme-btn" type="button" title="Тема"></button>
+    <button id="settings-btn" class="btn btn-ghost" type="button" title="Уведомления" hidden>🔔<span class="label"> Уведомления</span></button>
     <button id="logout" class="btn btn-ghost" hidden>Выйти</button>
   </div>
 </header>
@@ -39,6 +45,8 @@
         <button type="button" class="seg-btn" data-stock="depleted">Нет в наличии</button>
       </div>
       <a class="btn btn-ghost" href="/api/export.csv" download>Экспорт CSV</a>
+      <label class="btn btn-ghost" for="import-file">Импорт CSV</label>
+      <input id="import-file" type="file" accept=".csv,text/csv" hidden>
       <button class="btn btn-primary" id="add-btn" type="button">+ Добавить</button>
     </div>
     <div id="matched" class="muted small" hidden></div>
@@ -78,8 +86,14 @@
         <label class="check" id="photo-remove-wrap" hidden><input name="photo_remove" type="checkbox"> удалить текущее фото</label>
       </div>
     </div>
+    <details class="history" id="history" hidden>
+      <summary>История остатка</summary>
+      <ol id="history-list"></ol>
+    </details>
     <p id="edit-error" class="error" hidden></p>
     <div class="dlg-actions">
+      <button class="btn btn-danger-ghost" type="button" id="edit-delete" hidden>Удалить</button>
+      <span class="spacer"></span>
       <button class="btn btn-ghost" value="cancel" formnovalidate>Отмена</button>
       <button class="btn btn-primary" value="ok">Сохранить</button>
     </div>
@@ -94,6 +108,33 @@
       <button class="btn btn-ghost" value="cancel">Отмена</button>
       <button class="btn btn-danger" value="ok">Удалить</button>
     </div>
+  </form>
+</dialog>
+
+<dialog id="settings" class="dlg">
+  <form id="settings-form" method="dialog">
+    <h2>Уведомления об остатках</h2>
+    <label class="check"><input name="notify_low_stock" type="checkbox"> присылать в Telegram, когда товар заканчивается</label>
+    <label>Порог «мало», шт.<input name="low_stock_threshold" type="number" min="0" step="1" required></label>
+    <p class="muted small">Уведомление приходит после изменений в панели или импорта CSV,
+      если остаток опустился до порога или до нуля.</p>
+    <p id="settings-error" class="error" hidden></p>
+    <div class="dlg-actions">
+      <button class="btn btn-ghost" value="cancel" formnovalidate>Отмена</button>
+      <button class="btn btn-primary" value="ok">Сохранить</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="import-result" class="dlg">
+  <form method="dialog">
+    <h2 id="import-title">Импорт</h2>
+    <p id="import-summary"></p>
+    <ul id="import-errors" class="import-errors"></ul>
+    <p class="muted small">Формат — как у экспорта: колонки id, name, description, sku, quantity, avito_url
+      (подойдут и русские: название, описание, артикул, количество, ссылка). Совпадения ищутся по id, затем по артикулу.
+      Пустые ячейки не меняют существующие значения.</p>
+    <div class="dlg-actions"><button class="btn btn-primary" value="ok">OK</button></div>
   </form>
 </dialog>
 

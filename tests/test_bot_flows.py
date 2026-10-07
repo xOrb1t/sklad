@@ -195,3 +195,73 @@ async def test_other_seller_cannot_touch_product(env) -> None:  # type: ignore[n
     assert p.quantity == 5
     alerts = [m for m in api.calls if isinstance(m, AnswerCallbackQuery) and m.text]
     assert alerts and alerts[0].text == "Товар не найден."
+
+
+async def test_alert_settings_flow(env) -> None:  # type: ignore[no-untyped-def]
+    dp, bot, api, factory = env
+    await send(dp, bot, "/start")
+    await send(dp, bot, "/alerts")
+    assert "включены" in api.last_text()
+    await press(dp, bot, "alerts:toggle")
+    await press(dp, bot, "alerts:threshold")
+    await send(dp, bot, "abc")
+    assert "целое" in api.last_text()
+    await send(dp, bot, "7")
+    assert "выключены" in api.last_text() and "<b>7</b>" in api.last_text()
+
+    from bot.models import Seller
+
+    async with factory() as s:
+        seller = (await s.execute(select(Seller))).scalar_one()
+    assert (seller.notify_low_stock, seller.low_stock_threshold) == (False, 7)
+
+
+async def test_card_warns_and_history(env) -> None:  # type: ignore[no-untyped-def]
+    dp, bot, api, factory = env
+    await send(dp, bot, "/start")
+    await send(dp, bot, "/addproduct")
+    await press(dp, bot, "skip")
+    await send(dp, bot, "Термос")
+    await press(dp, bot, "skip")
+    await press(dp, bot, "skip")
+    await press(dp, bot, "skip")
+    await send(dp, bot, "1")
+    assert "заканчивается" in api.last_text()
+    [p] = await products(factory)
+    await press(dp, bot, f"edit:{p.id}:quantity")
+    await send(dp, bot, "-1")
+    assert "нет в наличии" in api.last_text()
+    await press(dp, bot, f"hist:{p.id}")
+    assert "-1 → 0" in api.last_text() and "+1 → 1" in api.last_text()
+
+
+async def test_csv_export_and_import_via_document(env) -> None:  # type: ignore[no-untyped-def]
+    from aiogram.methods import SendDocument
+    from aiogram.types import Document
+
+    dp, bot, api, factory = env
+    await send(dp, bot, "/start")
+    await send(dp, bot, "/export")
+    assert api.last_text() == "Товаров пока нет."
+
+    payload = "название;артикул;количество\nФильтр;F1;3\n".encode()
+
+    async def fake_download(file, destination=None, **kw):  # type: ignore[no-untyped-def]
+        destination.write(payload)
+        return destination
+
+    object.__setattr__(bot, "download", fake_download)
+    msg = Message(
+        message_id=next(_ids), date=datetime.now(timezone.utc), chat=CHAT, from_user=USER,
+        document=Document(file_id="D", file_unique_id="D", file_name="sklad.csv", file_size=len(payload)),
+    )
+    await dp.feed_update(bot, Update(update_id=next(_ids), message=msg))
+    assert "создано: 1" in api.last_text()
+
+    payload = "название;количество\n;5\n".encode()
+    await dp.feed_update(bot, Update(update_id=next(_ids), message=msg.model_copy(update={"message_id": next(_ids)})))
+    assert "Импорт отменён" in api.last_text() and "строка 2" in api.last_text()
+
+    await send(dp, bot, "/export")
+    assert isinstance(api.calls[-1], SendDocument)
+    assert [p.name for p in await products(factory)] == ["Фильтр"]

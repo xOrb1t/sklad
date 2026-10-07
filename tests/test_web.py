@@ -139,3 +139,53 @@ def test_export_csv(client: TestClient) -> None:
     text = r.content.decode("utf-8")
     assert text.startswith("﻿id;name;")
     assert '"Фильтр; масляный";;A1;2;' in text
+
+
+def test_history_settings_and_alerts(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    sent: list[tuple[int, str]] = []
+
+    async def fake_send(chat_id: int, text: str) -> None:
+        sent.append((chat_id, text))
+
+    monkeypatch.setattr(web_app, "_send_text", fake_send)
+    login(client, 1)
+    pid = client.post("/api/products", json={"name": "Свечи", "quantity": 5}, headers=H).json()["id"]
+
+    client.post(f"/api/products/{pid}/adjust", json={"delta": -3}, headers=H)  # 5 → 2: low
+    assert len(sent) == 1 and sent[0][0] == 1 and "осталось 2" in sent[0][1]
+    client.post(f"/api/products/{pid}/adjust", json={"delta": -1}, headers=H)  # already low: no repeat
+    assert len(sent) == 1
+    client.patch(f"/api/products/{pid}", json={"quantity": 0}, headers=H)  # → out
+    assert len(sent) == 2 and "закончился" in sent[1][1]
+
+    hist = client.get(f"/api/products/{pid}/history").json()
+    assert [(m["delta"], m["quantity_after"], m["source"]) for m in hist] == [
+        (-1, 0, "web"), (-1, 1, "web"), (-3, 2, "web"), (5, 5, "web"),
+    ]
+
+    assert client.patch("/api/settings", json={"low_stock_threshold": -1}, headers=H).status_code == 422
+    r = client.patch("/api/settings", json={"notify_low_stock": False, "low_stock_threshold": 10}, headers=H)
+    assert r.json() == {"notify_low_stock": False, "low_stock_threshold": 10}
+    assert client.get("/api/me").json()["settings"]["low_stock_threshold"] == 10
+    client.post(f"/api/products/{pid}/adjust", json={"delta": 20}, headers=H)
+    client.post(f"/api/products/{pid}/adjust", json={"delta": -15}, headers=H)  # 20 → 5 ≤ 10, but muted
+    assert len(sent) == 2
+    stats = client.get("/api/stats").json()
+    assert stats["low_stock"] == 10 and stats["low"] == 1
+
+
+def test_import_endpoint(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(web_app, "_send_text", lambda *a: None)
+    login(client, 1)
+    ok = "name;sku;quantity\nФильтр;F1;3\nСвечи;S1;0\n".encode()
+    r = client.post("/api/import.csv", content=ok, headers={**H, "Content-Type": "text/csv"})
+    assert r.json() == {"created": 2, "updated": 0, "unchanged": 0}
+
+    bad = b"name;sku;quantity\nX;F9;abc\n"
+    r = client.post("/api/import.csv", content=bad, headers={**H, "Content-Type": "text/csv"})
+    assert r.status_code == 422 and r.json()["detail"]["total"] == 1
+    assert client.get("/api/products").json()["total"] == 2
+
+    exported = client.get("/api/export.csv").content
+    r = client.post("/api/import.csv", content=exported, headers={**H, "Content-Type": "text/csv"})
+    assert r.json() == {"created": 0, "updated": 0, "unchanged": 2}

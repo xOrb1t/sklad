@@ -13,8 +13,10 @@
   --radius: 10px;
   color-scheme: light dark;
 }
+/* Theme: html[data-theme] = light | dark; absent = follow the OS */
+:root[data-theme="light"] { color-scheme: light; }
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme="light"]) {
     --bg: #0f1115;
     --surface: #171a21;
     --border: #2a2f3a;
@@ -25,7 +27,21 @@
     --danger: #ef4444;
     --warn: #f59e0b;
     --row-hover: #1d212a;
+    color-scheme: dark;
   }
+}
+:root[data-theme="dark"] {
+  --bg: #0f1115;
+  --surface: #171a21;
+  --border: #2a2f3a;
+  --text: #e6e8ec;
+  --muted: #9aa3b2;
+  --primary: #3b82f6;
+  --primary-hover: #60a5fa;
+  --danger: #ef4444;
+  --warn: #f59e0b;
+  --row-hover: #1d212a;
+  color-scheme: dark;
 }
 
 * { box-sizing: border-box; }
@@ -62,6 +78,11 @@ main { max-width: 1200px; margin: 0 auto; padding: 20px 24px 40px; }
 .btn-primary:hover { background: var(--primary-hover); }
 .btn-danger { background: var(--danger); border-color: var(--danger); color: #fff; font-weight: 600; }
 .btn-ghost { background: transparent; }
+.btn-danger-ghost { background: transparent; color: var(--danger); border-color: transparent; }
+.dlg-actions .spacer { flex: 1; }
+.registry td.name { cursor: pointer; }
+.registry td.name:hover { color: var(--primary); }
+.brand { white-space: nowrap; }
 .btn-icon { padding: 3px 9px; min-width: 32px; }
 
 /* stats */
@@ -158,7 +179,8 @@ a.btn { text-decoration: none; display: inline-block; }
 @media (max-width: 720px) {
   main { padding: 14px 16px 30px; }
   .topbar { padding: 10px 16px; }
-  #who { display: none; }
+  #who, #settings-btn .label { display: none; }
+  .topbar-right { gap: 6px; }
   .registry th:nth-child(1), .registry td:nth-child(1),
   .registry th:nth-child(3), .registry td:nth-child(3),
   .registry th:nth-child(4), .registry td:nth-child(4) { display: none; }
@@ -173,4 +195,19 @@ a.btn { text-decoration: none; display: inline-block; }
   .dlg .row2 { grid-template-columns: 1fr; }
   .seg { flex: 1 1 100%; }
   .seg-btn { flex: 1; }
+}
+
+/* history, settings, import */
+.history { border-top: 1px solid var(--border); padding-top: 10px; }
+.history summary { cursor: pointer; color: var(--muted); font-size: 13px; }
+.history ol { list-style: none; margin: 8px 0 0; padding: 0; max-height: 180px; overflow-y: auto; font-size: 13px; }
+.history li { display: grid; grid-template-columns: 110px 60px 1fr auto; gap: 8px; padding: 3px 0; border-bottom: 1px dashed var(--border); }
+.history .plus { color: var(--ok); }
+.history .minus { color: var(--danger); }
+.import-errors { margin: 0; padding-left: 18px; max-height: 240px; overflow-y: auto; font-size: 13px; color: var(--danger); }
+.theme-btn { min-width: 40px; }
+
+@media (max-width: 480px) {
+  .registry th:last-child, .registry td.row-actions { display: none; }
+  .registry td.num { padding-right: 12px; }
 }

@@ -38,6 +38,8 @@ async def main() -> None:
             BotCommand(command="addproduct", description="Добавить товар"),
             BotCommand(command="search", description="Поиск"),
             BotCommand(command="web", description="Веб-панель"),
+            BotCommand(command="alerts", description="Уведомления об остатках"),
+            BotCommand(command="export", description="Выгрузка в CSV"),
             BotCommand(command="cancel", description="Отменить ввод"),
             BotCommand(command="help", description="Справка"),
         ])
